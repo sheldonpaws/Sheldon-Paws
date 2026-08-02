@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+измеения при сборке.txt
+AGENTS.md
+tests/

@@ -5,11 +5,12 @@
 import sys
 import os
 
-# Добавить директорию agent/ в путь для импортов
-_agent_dir = os.path.dirname(os.path.abspath(__file__))
+# Плоские импорты: модули лежат в agent/ (dev) или плоско в корне bundle (frozen).
 if getattr(sys, "frozen", False):
-    # PyInstaller: агент лежит внутри bundle
-    _agent_dir = os.path.join(sys._MEIPASS, "agent")
+    # PyInstaller кладёт agent/*.py на верхний уровень sys._MEIPASS
+    _agent_dir = sys._MEIPASS
+else:
+    _agent_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent")
 sys.path.insert(0, _agent_dir)
 
 from PyQt6.QtWidgets import QApplication

@@ -270,23 +270,3 @@ def app_stylesheet() -> str:
     }}
     """
 
-def message_stylesheet(role: str) -> str:
-    """Стиль для пузыря сообщения."""
-    p = PALETTE
-    if role == "user":
-        return f"""
-        #user_message {{
-            background-color: {p['user_bubble']};
-            border-radius: 12px;
-            padding: 10px 14px;
-        }}
-        """
-    else:
-        return f"""
-        #assistant_message {{
-            background-color: {p['assistant_bubble']};
-            border: 1px solid {p['border']};
-            border-radius: 12px;
-            padding: 10px 14px;
-        }}
-        """

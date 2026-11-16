@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+# Лимит размера одного файла-чанка, символов: больше — обрезаем,
+# чтобы весь файл целиком не уезжал в контекст промпта.
+MAX_FILE_CHARS = 30_000
+
 
 class KnowledgeBase:
     """База знаний из статических файлов (бэкстори, профили и т.д.).
@@ -32,6 +36,8 @@ class KnowledgeBase:
             text = text.strip()
             if not text:
                 continue
+            if len(text) > MAX_FILE_CHARS:
+                text = text[:MAX_FILE_CHARS] + "\n\n… (файл обрезан, слишком длинный)"
             self._chunks.append({
                 "file": f.name,
                 "text": text,

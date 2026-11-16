@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 from typing import Generator
-
 from openai import OpenAI
-
 from config import GPTUNNEL_BASE_URL, AgentConfig
-from secrets import SecretsService
+from app_secrets import SecretsService
+
+# Таймаут «лёгкого» сетевого запроса (список моделей), сек.
+# Список моделей грузится в фоновом потоке, поэтому держать его долго незачем.
+MODELS_TIMEOUT = 15.0
 
 
 class LLMClient:
@@ -19,10 +21,14 @@ class LLMClient:
     def __init__(self, config: AgentConfig):
         self._config = config
         self._client: OpenAI | None = None
+        self._api_key = ""
+        # Модель, выбранная для текущего сеанса (не сохраняется в config).
+        self._model_override: str | None = None
         self._reconnect()
 
     def _reconnect(self):
         api_key = SecretsService.get_api_key()
+        self._api_key = api_key
         if api_key:
             self._client = OpenAI(
                 api_key=api_key,
@@ -35,32 +41,30 @@ class LLMClient:
     def is_connected(self) -> bool:
         return self._client is not None
 
-    def set_api_key(self, key: str):
-        SecretsService.set_api_key(key)
+    def set_api_key(self, key: str) -> bool:
+        """Сохранить ключ и переподключиться. False — хранилище недоступно."""
+        ok = SecretsService.set_api_key(key)
         self._reconnect()
+        return ok
 
-    def set_model(self, model_id: str):
-        self._config.model = model_id
-        self._config.save()
+    @property
+    def model(self) -> str:
+        """Модель, реально используемая для запросов."""
+        return self._model_override or self._config.model
 
-    def chat(
-        self,
-        messages: list[dict],
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-    ) -> str:
-        """Синхронный запрос — возвращает полный ответ."""
-        if not self._client:
-            raise RuntimeError("API ключ не задан. Укажите ключ в настройках.")
+    def set_model(self, model_id: str, *, persist: bool = False):
+        """Выбрать модель.
 
-        response = self._client.chat.completions.create(
-            model=self._config.model,
-            messages=messages,
-            temperature=temperature or self._config.temperature,
-            max_tokens=max_tokens or self._config.max_tokens,
-            extra_body={"useWalletBalance": self._config.use_wallet_balance},
-        )
-        return response.choices[0].message.content or ""
+        persist=True — сохранить её как глобальную (config.model);
+        persist=False — использовать только в текущем сеансе,
+        не меняя сохранённую в конфиге модель.
+        """
+        if persist:
+            self._config.model = model_id
+            self._model_override = None
+            self._config.save()
+        else:
+            self._model_override = model_id
 
     def chat_stream(
         self,
@@ -73,24 +77,36 @@ class LLMClient:
             raise RuntimeError("API ключ не задан. Укажите ключ в настройках.")
 
         stream = self._client.chat.completions.create(
-            model=self._config.model,
+            model=self.model,
             messages=messages,
-            temperature=temperature or self._config.temperature,
-            max_tokens=max_tokens or self._config.max_tokens,
+            temperature=temperature if temperature is not None else self._config.temperature,
+            max_tokens=max_tokens if max_tokens is not None else self._config.max_tokens,
             stream=True,
             extra_body={"useWalletBalance": self._config.use_wallet_balance},
         )
         for chunk in stream:
+            if not chunk.choices:
+                continue  # служебный чанк без вариантов ответа (например, idle)
             delta = chunk.choices[0].delta
             if delta.content:
                 yield delta.content
 
     def list_models(self) -> list[dict]:
-        """Получить список доступных моделей от GPTunnel."""
+        """Получить список доступных моделей от GPTunnel.
+
+        Запрос идёт с коротким таймаутом и без ретраев, чтобы не подвешивать
+        ожидание (вызывается из фонового потока, но и там долгие таймауты ни к чему).
+        """
         if not self._client:
             return []
         try:
-            models = self._client.models.list()
+            probe = OpenAI(
+                api_key=self._api_key,
+                base_url=GPTUNNEL_BASE_URL,
+                timeout=MODELS_TIMEOUT,
+                max_retries=0,
+            )
+            models = probe.models.list()
             result = []
             for m in models.data:
                 provider = self._guess_provider(m.id)

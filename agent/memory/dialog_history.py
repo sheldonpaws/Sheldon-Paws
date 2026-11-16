@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 from datetime import datetime
@@ -108,7 +109,8 @@ class DialogHistory:
 
     # ── Сообщения ────────────────────────────────────────────
 
-    def add_message(self, role: str, content: str):
+    def add_message(self, role: str, content: str) -> int:
+        """Добавить сообщение в текущую сессию. Возвращает его индекс."""
         if not self._current_session_id:
             self.new_session()
         self._current_session.append({
@@ -116,6 +118,15 @@ class DialogHistory:
             "content": content,
             "timestamp": datetime.now().isoformat(),
         })
+        return len(self._current_session) - 1
+
+    def current_messages(self) -> list[dict]:
+        """Копия сообщений текущей сессии (публичный доступ вместо _current_session)."""
+        return list(self._current_session)
+
+    def history_start_index(self, count: int) -> int:
+        """Индекс первого из последних count сообщений в текущей сессии."""
+        return max(0, len(self._current_session) - count)
 
     def get_messages_for_api(self, max_messages: int = 50) -> list[dict]:
         messages = self._current_session[-max_messages:]
@@ -124,13 +135,6 @@ class DialogHistory:
     def get_last_n(self, n: int = 10) -> list[dict]:
         return self._current_session[-n:]
 
-    def search(self, query: str) -> list[dict]:
-        query_lower = query.lower()
-        return [
-            m for m in self._current_session
-            if query_lower in m["content"].lower()
-        ]
-
     # ── Сохранение / загрузка ────────────────────────────────
 
     def _save_current_session(self):
@@ -138,17 +142,20 @@ class DialogHistory:
             return
         filename = self._make_filename(self._current_session_id, self._current_title)
         filepath = self._dir / filename
-        filepath.write_text(
+        # Атомарная запись: временный файл + os.replace
+        tmp_file = filepath.with_name(filepath.name + ".tmp")
+        tmp_file.write_text(
             json.dumps(self._current_session, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        os.replace(tmp_file, filepath)
 
     def save(self):
         self._save_current_session()
 
     def load_session(self, session_id: str) -> bool:
         """Загрузить сессию по id (timestamp). Находит файл по префиксу."""
-        for f in self._dir.glob(f"{session_id}*.json"):
+        for f in self._dir.glob(glob.escape(session_id) + "*.json"):
             if f.name == "sessions_meta.json":
                 continue
             self._save_current_session()
@@ -184,12 +191,30 @@ class DialogHistory:
         return sessions
 
     def delete_session(self, session_id: str) -> bool:
-        """Удалить сессию с диска по её id."""
-        for f in self._dir.glob(f"{session_id}*.json"):
-            f.unlink()
+        """Удалить сессию с диска по её id.
+
+        Важно: если удаляется текущая сессия, её состояние сбрасывается —
+        иначе ближайший же _save_current_session() (save_all/load_session/
+        new_session) пересоздаст файл, и «удаление» будет отменено.
+        """
+        if not session_id:
+            return False          # пустой id дал бы паттерн "*.json" — удалило бы всё
+        deleted = False
+        for f in self._dir.glob(glob.escape(session_id) + "*.json"):
+            if f.name == self._meta_file().name:
+                continue
+            try:
+                f.unlink()
+                deleted = True
+            except OSError:
+                continue
+        if session_id == self._current_session_id:
+            self._current_session = []
+            self._current_session_id = ""
+            self._current_title = ""
+        if deleted:
             self.remove_session_meta(session_id)
-            return True
-        return False
+        return deleted
 
     # ── Саммари сессий (короткий пересказ для контекстной вставки) ─────────────
 
@@ -210,8 +235,4 @@ class DialogHistory:
             return filepath.read_text(encoding="utf-8")
         return None
 
-    def find_session_summary(self, session_id: str) -> Optional[str]:
-        """Найти саммари сессии по её id (timestamp)."""
-        if "##" in session_id:
-            session_id = session_id.split("##", 1)[0]
-        return self.load_session_summary(session_id)
+    # find_session_summary удалён — метод нигде не вызывался (мёртвый код).

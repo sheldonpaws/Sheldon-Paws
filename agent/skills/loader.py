@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from paths import SKILLS_DIR, USER_SKILLS_DIR
+from .skill_writer import migrate_bundled_skills
 
 
 @dataclass
@@ -26,6 +27,20 @@ class Skill:
 
 def discover_skills() -> list[Skill]:
     """Найти все доступные навыки в папке skills/."""
+    # Домашняя папка скиллов должна существовать с первого старта:
+    # у нового пользователя она создаётся здесь, а не ждёт первого скилла.
+    try:
+        USER_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"[Навыки] Не удалось создать {USER_SKILLS_DIR}: {e}")
+
+    # Однократный перенос bundled-скиллов в домашнюю папку (бандл удалён —
+    # тогда миграция просто вернёт пустой список):
+    # копия появляется только если её там ещё нет (правки не затираем).
+    migrated = migrate_bundled_skills()
+    if migrated:
+        print(f"[Навыки] Перенесено в домашнюю папку: {', '.join(migrated)}")
+
     skills: list[Skill] = []
     seen_names: set[str] = set()
 
@@ -36,7 +51,9 @@ def discover_skills() -> list[Skill]:
                 continue
             skill_file = skill_dir / "SKILL.md"
             if skill_file.exists():
-                content = skill_file.read_text(encoding="utf-8")
+                content = _read_skill_file(skill_file, skill_dir.name)
+                if content is None:
+                    continue
                 description = _extract_description(content)
                 skills.append(Skill(
                     name=skill_dir.name,
@@ -53,7 +70,9 @@ def discover_skills() -> list[Skill]:
                 continue
             skill_file = skill_dir / "SKILL.md"
             if skill_file.exists():
-                content = skill_file.read_text(encoding="utf-8")
+                content = _read_skill_file(skill_file, skill_dir.name)
+                if content is None:
+                    continue
                 description = _extract_description(content)
                 skills.append(Skill(
                     name=skill_dir.name,
@@ -63,6 +82,15 @@ def discover_skills() -> list[Skill]:
                 ))
 
     return skills
+
+
+def _read_skill_file(skill_file: Path, skill_name: str) -> str | None:
+    """Прочитать SKILL.md; при ошибке кодировки/чтения — предупредить и пропустить."""
+    try:
+        return skill_file.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError) as e:
+        print(f"[Навыки] Пропущен навык «{skill_name}»: не удалось прочитать SKILL.md — {e}")
+        return None
 
 
 def _extract_description(content: str) -> str:

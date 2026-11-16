@@ -1,0 +1,27 @@
+# Переводы строк для Windows-проекта Sheldon-Paws.
+# В репозитории git хранит LF; чем в рабочей копии — управляем ниже.
+
+# Текст по умолчанию: git сам нормализует переводы строк
+* text=auto
+
+# Код и документы: LF везде. Тогда файлы с LF (я заливаю их так)
+# не вызывают warning «LF will be replaced by CRLF».
+*.py text eol=lf
+*.md text eol=lf
+*.spec text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.txt text eol=lf
+
+# Bat — строго CRLF: cmd.exe ломает блоки с LF
+*.bat text eol=crlf
+
+# Бинарники git не трогает
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary

@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-import json
+from datetime import datetime
 from pathlib import Path
 
 from .dialog_history import DialogHistory
@@ -33,6 +33,9 @@ class MemoryManager:
         self.knowledge = KnowledgeBase(ASSETS_DIR)
         USER_STORIES_DIR.mkdir(parents=True, exist_ok=True)
         self.user_stories = KnowledgeBase(USER_STORIES_DIR)
+        # Папка context (~/.sheldon_paws/context/) — тоже участвует в поиске:
+        # кроме штатного context.md туда могут ложиться свои файлы.
+        self.user_context = KnowledgeBase(CONTEXT_DIR)
 
     # --- Контекст (Markdown) ---
 
@@ -54,6 +57,14 @@ class MemoryManager:
         else:
             self.set_context_md(content)
 
+    def log_session_event(self, event: str):
+        """Записать событие сессии в context.md («контекст» из README).
+
+        Запись идёт в конец файла (без перезаписи содержимого пользователя).
+        """
+        line = f"- {datetime.now():%Y-%m-%d %H:%M} — {event}"
+        self.append_context_md(line)
+
     # --- Комбинированный доступ ---
 
     def get_full_context(self, user_query: str = "") -> str:
@@ -64,17 +75,25 @@ class MemoryManager:
         """
         parts: list[str] = []
 
-        # 1. Факты (релевантные запросу, если он есть, иначе все)
+        # 1. Факты: при запросе — только релевантные (без дублей),
+        #    без запроса — весь список. Раньше добавлялись и релевантные,
+        #    и полный to_markdown — в промпт попадали дубли.
         if user_query:
             relevant_facts = self.facts.search(user_query)
-            if relevant_facts:
-                md_lines = ["# Память агента: факты"]
-                for item in relevant_facts:
-                    md_lines.append(f"- **{item['key']}**: {item['value']}")
+            seen: set[tuple[str, str, str]] = set()
+            md_lines = ["# Память агента: факты"]
+            for item in relevant_facts:
+                fact_id = (item["category"], item["key"], item["value"])
+                if fact_id in seen:
+                    continue
+                seen.add(fact_id)
+                md_lines.append(f"- **{item['key']}**: {item['value']}")
+            if len(md_lines) > 1:
                 parts.append("\n".join(md_lines))
-        facts_md = self.facts.to_markdown()
-        if facts_md.strip() not in ("# Память агента: факты", ""):
-            parts.append(facts_md)
+        else:
+            facts_md = self.facts.to_markdown()
+            if facts_md.strip() not in ("# Память агента: факты", ""):
+                parts.append(facts_md)
 
         # 2. Наблюдения (фильтр по запросу, если он есть, иначе последние 10)
         if user_query:
@@ -129,22 +148,26 @@ class MemoryManager:
                     s_lines.append("")
                 parts.append("\n".join(s_lines))
 
+        # 7. Папка context (~/.sheldon_paws/context/) — только по запросу.
+        #    context.md и так попадает в контекст целиком (пункт 4), поэтому
+        #    его же чанк здесь не дублируем.
+        if user_query:
+            ctx_chunks = [
+                c for c in self.user_context.search(user_query)
+                if c["file"] != "context.md"
+            ]
+            if ctx_chunks:
+                c_lines = ["# Папка context пользователя", ""]
+                for chunk in ctx_chunks:
+                    c_lines.append(f"### {chunk['file']}")
+                    c_lines.append(chunk["text"])
+                    c_lines.append("")
+                parts.append("\n".join(c_lines))
+
         return "\n\n".join(parts)
 
     # --- Экспорт/Импорт ---
-
-    def export_session(self, filepath: Path):
-        """Экспортировать текущую сессию, факты и наблюдения в файл."""
-        data = {
-            "dialog": self.dialog._current_session,
-            "facts": self.facts._data,
-            "observations": self.observations.get_all(),
-            "context_md": self.get_context_md(),
-        }
-        filepath.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+    # export_session удалён — метод нигде не вызывался (мёртвый код).
 
     # --- Сохранение ---
 

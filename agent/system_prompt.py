@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from config import AgentConfig
-from paths import AGENTS_MD, SKILLS_DIR
+from paths import AGENTS_MD, SKILLS_DIR, USER_SKILLS_DIR
 
 
 def load_agents_md() -> str:
@@ -17,10 +17,20 @@ def load_agents_md() -> str:
 
 
 def load_skill(skill_name: str) -> str:
-    """Загрузить содержимое навыка из SKILL.md."""
-    skill_path = SKILLS_DIR / skill_name / "SKILL.md"
-    if skill_path.exists():
-        return skill_path.read_text(encoding="utf-8")
+    """Загрузить содержимое навыка из SKILL.md.
+
+    Как и skills/loader.py, сначала ищем пользовательский навык
+    (~/.sheldon_paws/skills/), затем bundled (assets/Агент/skills/).
+    """
+    for base_dir in (USER_SKILLS_DIR, SKILLS_DIR):
+        skill_path = base_dir / skill_name / "SKILL.md"
+        if not skill_path.exists():
+            continue
+        try:
+            return skill_path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError) as e:
+            print(f"[Навыки] Не удалось прочитать {skill_path}: {e}")
+            # Пробуем bundled-вариант этого же навыка
     return ""
 
 
@@ -67,7 +77,24 @@ def build_system_prompt(
     if config.system_prompt_extra:
         parts.append(f"## ДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ\n\n{config.system_prompt_extra}")
 
-    # 6. Финальная инструкция — формат ответа
+    # 6. Сохранение навыков (служебный блок <skill> в конце ответа)
+    parts.append(
+        "## СОХРАНЕНИЕ НАВЫКОВ\n\n"
+        "Ты умеешь сохранять навыки — короткие повторяемые инструкции, к которым "
+        "стоит вернуться позже. Сохрани навык, когда пользователь прямо попросит "
+        "(«сохрани как скилл», «запомни навыком») или когда в разговоре вы "
+        "договорились о правиле или процедуре, которая пригодится потом. "
+        "Единичные факты и мелочи не сохраняй.\n\n"
+        "Формат — служебный блок в САМОМ КОНЦЕ ответа, после обычного текста:\n"
+        "<skill name=\"imya-navyka\" description=\"Одно предложение о навыке\">\n"
+        "Когда применять и что делать: шаги, правила, примеры.\n"
+        "</skill>\n\n"
+        "name — строчные латинские буквы, цифры и дефисы. Пиши блок последним: "
+        "после него ничего не добавляй. Пользователь блок не увидит: приложение "
+        "спрячет его, сохранит как скилл и покажет подтверждение в статус-баре."
+    )
+
+    # 7. Финальная инструкция — формат ответа
     parts.append(
         "## ФОРМАТ ОТВЕТА\n\n"
         "Отвечай в характере Шелдона Павса. "

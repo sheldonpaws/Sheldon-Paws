@@ -59,7 +59,7 @@ def detect_facts(text: str, store: FactsStore) -> list[dict]:
     for pattern, key, group in _PATTERNS:
         if key in seen_keys:
             continue
-        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+        match = re.search(pattern, text, re.IGNORECASE)
         if not match:
             continue
         value = match.group(group).strip()

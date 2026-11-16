@@ -4,8 +4,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from .loader import Skill, discover_skills
 from config import AgentConfig
 
@@ -31,14 +29,19 @@ class SkillRegistry:
     def active_skills(self) -> list[Skill]:
         return [s for s in self._skills if s.active]
 
-    def toggle_skill(self, skill_name: str) -> bool:
-        """Переключить навык (активировать/деактивировать). Возвращает новое состояние."""
+    def toggle_skill(self, skill_name: str) -> bool | None:
+        """Переключить навык (активировать/деактивировать).
+
+        Возвращает новое состояние (True/False) либо None, если навык
+        с таким именем не найден — вызывающий может различить
+        «деактивировано» и «не найдено».
+        """
         for skill in self._skills:
             if skill.name == skill_name:
                 skill.active = not skill.active
                 self._sync_config()
                 return skill.active
-        return False
+        return None
 
     def activate_skill(self, skill_name: str):
         for skill in self._skills:

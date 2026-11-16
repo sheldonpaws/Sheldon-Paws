@@ -7,7 +7,6 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QCursor
 
-from config import PALETTE
 from gui.styles import app_stylesheet
 
 

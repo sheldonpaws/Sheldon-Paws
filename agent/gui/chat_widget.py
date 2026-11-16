@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QKeyEvent, QAction, QCursor
+from PyQt6.QtGui import QKeyEvent, QCursor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QScrollArea, QTextEdit, QPushButton, QSizePolicy, QMenu, QApplication,
@@ -18,14 +18,34 @@ class MessageBubble(QWidget):
     """Пузырь одного сообщения."""
 
     remember_requested = pyqtSignal(str, str)  # role, selected_text
-    regenerate_requested = pyqtSignal(str, str)  # old_text, new_text
+    regenerate_requested = pyqtSignal(object, str)  # сам пузырь, новый текст
 
     def __init__(self, role: str, text: str, parent=None):
         super().__init__(parent)
         self._role = role
         self._text = text
+        # Индекс сообщения в текущей сессии истории (None — сообщение
+        # не сохранено в историю, например служебное уведомление).
+        self.history_index: int | None = None
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._setup_ui()
+
+    @property
+    def role(self) -> str:
+        """Роль сообщения: «user» или «assistant»."""
+        return self._role
+
+    def set_text(self, text: str):
+        """Заменить текст пузыря (и в режиме просмотра, и в данных)."""
+        self._text = text
+        self._text_label.setText(text)
+        self._text_edit.setPlainText(text)
+
+    def set_actions_enabled(self, enabled: bool):
+        """Включить/выключить кнопки редактирования пузыря."""
+        if self._role == "user":
+            self._edit_btn.setEnabled(enabled)
+        self._send_edit_btn.setEnabled(enabled)
 
     def _setup_ui(self):
         self._outer_layout = QVBoxLayout(self)
@@ -96,11 +116,11 @@ class MessageBubble(QWidget):
         if not new_text or new_text == self._text:
             self._exit_edit_mode()
             return
-        old_text = self._text
-        self._text = new_text
-        self._text_label.setText(new_text)
+        # Текст пузыря уже обновлён здесь, поэтому сигнал несёт сам объект
+        # пузыря, а не старую строку — иначе поиск по тексту не находит его.
+        self.set_text(new_text)
         self._exit_edit_mode()
-        self.regenerate_requested.emit(old_text, new_text)
+        self.regenerate_requested.emit(self, new_text)
 
     def _exit_edit_mode(self):
         self._text_edit.setVisible(False)
@@ -159,12 +179,13 @@ class ChatWidget(QWidget):
 
     send_message = pyqtSignal(str)
     remember_requested = pyqtSignal(str, str)  # role, text
-    regenerate_requested = pyqtSignal(str, str)  # old_text, new_text
+    regenerate_requested = pyqtSignal(object, str)  # пузырь, новый текст
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._messages: list[MessageBubble] = []
         self._current_assistant_bubble: MessageBubble | None = None
+        self._scroll_pending = False
         self._setup_ui()
 
     def _setup_ui(self):
@@ -176,7 +197,6 @@ class ChatWidget(QWidget):
         scroll.setObjectName("chat_area")
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
         scroll.viewport().setStyleSheet(f"background-color: {PALETTE['bg_main']};")
 
         self._messages_container = QWidget()
@@ -204,17 +224,66 @@ class ChatWidget(QWidget):
 
         layout.addLayout(input_row)
 
+    # ── Публичный доступ к сообщениям ─────────────────────────
+
+    @property
+    def messages(self) -> list[MessageBubble]:
+        """Список пузырей в порядке отображения."""
+        return list(self._messages)
+
+    def last_message(self) -> MessageBubble | None:
+        """Последний пузырь (или None, если сообщений нет)."""
+        return self._messages[-1] if self._messages else None
+
+    def index_of(self, bubble: MessageBubble) -> int:
+        """Позиция пузыря в списке (-1 если не найден)."""
+        try:
+            return self._messages.index(bubble)
+        except ValueError:
+            return -1
+
+    def remove_message_after(self, bubble: MessageBubble):
+        """Удалить пузырь, следующий за указанным (если он assistant)."""
+        i = self.index_of(bubble)
+        if i < 0 or i + 1 >= len(self._messages):
+            return
+        nxt = self._messages[i + 1]
+        if nxt.role != "assistant":
+            return
+        del self._messages[i + 1]
+        self._messages_layout.removeWidget(nxt)
+        nxt.deleteLater()
+
+    def discard_last_message(self):
+        """Удалить последний пузырь (например, пустой ответ при ошибке)."""
+        if not self._messages:
+            return
+        bubble = self._messages.pop()
+        self._messages_layout.removeWidget(bubble)
+        if self._current_assistant_bubble is bubble:
+            self._current_assistant_bubble = None
+        bubble.deleteLater()
+
+    def shift_history_indices(self, from_index: int, delta: int):
+        """Сдвинуть привязку пузырей к истории начиная с from_index."""
+        for b in self._messages:
+            if b.history_index is not None and b.history_index >= from_index:
+                b.history_index += delta
+
+    # ── Работа с сообщениями ──────────────────────────────────
+
     def _connect_bubble(self, bubble: MessageBubble):
         bubble.remember_requested.connect(self.remember_requested)
         bubble.regenerate_requested.connect(self.regenerate_requested)
 
-    def restore_from_history(self, messages: list[dict]):
+    def restore_from_history(self, messages: list[dict], start_index: int = 0):
         if not messages:
             return
-        for msg in messages:
+        for offset, msg in enumerate(messages):
             role = msg.get("role", "user")
             content = msg.get("content", "")
             bubble = MessageBubble(role, content)
+            bubble.history_index = start_index + offset
             self._connect_bubble(bubble)
             idx = self._messages_layout.count() - 1
             self._messages_layout.insertWidget(idx, bubble)
@@ -228,15 +297,16 @@ class ChatWidget(QWidget):
         self._input.clear()
         self.send_message.emit(text)
 
-    def add_user_message(self, text: str):
+    def add_user_message(self, text: str) -> MessageBubble:
         bubble = MessageBubble("user", text)
         self._connect_bubble(bubble)
         idx = self._messages_layout.count() - 1
         self._messages_layout.insertWidget(idx, bubble)
         self._messages.append(bubble)
         self._scroll_to_bottom()
+        return bubble
 
-    def start_assistant_message(self):
+    def start_assistant_message(self) -> MessageBubble:
         bubble = MessageBubble("assistant", "")
         self._connect_bubble(bubble)
         idx = self._messages_layout.count() - 1
@@ -244,6 +314,7 @@ class ChatWidget(QWidget):
         self._messages.append(bubble)
         self._current_assistant_bubble = bubble
         self._scroll_to_bottom()
+        return bubble
 
     def append_assistant_text(self, text: str):
         if self._current_assistant_bubble:
@@ -253,13 +324,14 @@ class ChatWidget(QWidget):
     def finish_assistant_message(self):
         self._current_assistant_bubble = None
 
-    def add_assistant_message(self, text: str):
+    def add_assistant_message(self, text: str) -> MessageBubble:
         bubble = MessageBubble("assistant", text)
         self._connect_bubble(bubble)
         idx = self._messages_layout.count() - 1
         self._messages_layout.insertWidget(idx, bubble)
         self._messages.append(bubble)
         self._scroll_to_bottom()
+        return bubble
 
     def clear_chat(self):
         for msg in self._messages:
@@ -268,10 +340,20 @@ class ChatWidget(QWidget):
         self._current_assistant_bubble = None
 
     def _scroll_to_bottom(self):
-        QTimer.singleShot(50, lambda: self._scroll_area.verticalScrollBar().setValue(
-            self._scroll_area.verticalScrollBar().maximum()
-        ))
+        # Не плодим таймеры на каждый токен: пока таймер висит — пропускаем.
+        if self._scroll_pending:
+            return
+        self._scroll_pending = True
+        QTimer.singleShot(50, self._do_scroll_to_bottom)
+
+    def _do_scroll_to_bottom(self):
+        self._scroll_pending = False
+        bar = self._scroll_area.verticalScrollBar()
+        bar.setValue(bar.maximum())
 
     def set_enabled(self, enabled: bool):
+        """Включить/выключить ввод и кнопки редактирования пузырей."""
         self._input.setEnabled(enabled)
         self._send_btn.setEnabled(enabled)
+        for bubble in self._messages:
+            bubble.set_actions_enabled(enabled)

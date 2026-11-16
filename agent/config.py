@@ -3,11 +3,10 @@
 """
 
 import json
-from pathlib import Path
+import os
 from dataclasses import dataclass, field
-from typing import Optional
 
-from paths import DATA_DIR, CONFIG_FILE, MEMORY_DIR, SKILLS_DIR, AGENTS_MD
+from paths import DATA_DIR, CONFIG_FILE
 
 # GPTunnel API
 GPTUNNEL_BASE_URL = "https://gptunnel.ru/v1"
@@ -31,7 +30,6 @@ AVAILABLE_MODELS = [
     {"id": "mistral-medium", "name": "Mistral Medium", "provider": "Mistral"},
     {"id": "mistral-small", "name": "Mistral Small", "provider": "Mistral"},
 ]
-
 DEFAULT_MODEL = "gpt-4o"
 
 # Палитра «Собачьей мудрости»
@@ -82,10 +80,14 @@ class AgentConfig:
     def save(self):
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         data = {k: v for k, v in self.__dict__.items() if k not in _TRANSIENT_FIELDS}
-        CONFIG_FILE.write_text(
+        # Атомарная запись: временный файл + os.replace, чтобы обрыв
+        # в середине записи не портил config.json
+        tmp_file = CONFIG_FILE.with_name(CONFIG_FILE.name + ".tmp")
+        tmp_file.write_text(
             json.dumps(data, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        os.replace(tmp_file, CONFIG_FILE)
 
     @classmethod
     def load(cls) -> "AgentConfig":
@@ -93,10 +95,13 @@ class AgentConfig:
         if CONFIG_FILE.exists():
             try:
                 data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    # В файле лежит не-словарь — считаем конфиг отсутствующим
+                    return cls()
                 # Не загружаем api_key из файла — он в Credential Manager
                 data.pop("api_key", None)
                 return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError, OSError, ValueError):
                 pass
         return cls()
 

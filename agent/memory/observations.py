@@ -4,7 +4,6 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-
 class ObservationsStore:
     """Свободные наблюдения/заметки о диалогах с пользователем."""
 
@@ -13,11 +12,18 @@ class ObservationsStore:
         self._dir.mkdir(parents=True, exist_ok=True)
         self._file = self._dir / "observations.json"
         self._data: list[dict] = self._load()
+        # Монотонный счётчик id: продолжаем от максимального существующего,
+        # чтобы после clear() id не начинались заново с нуля.
+        self._next_id = max(
+            (item.get("id", -1) for item in self._data), default=-1
+        ) + 1
 
     def _load(self) -> list[dict]:
         if self._file.exists():
             try:
-                return json.loads(self._file.read_text(encoding="utf-8"))
+                data = json.loads(self._file.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    return data
             except json.JSONDecodeError:
                 pass
         return []
@@ -29,13 +35,14 @@ class ObservationsStore:
         )
 
     def add(self, observation: str, context: str = ""):
-        """Добавить новое наблюдение."""
+        """Добавить новое наблюдение. Возвращает его id."""
         item = {
-            "id": len(self._data),
+            "id": self._next_id,
             "text": observation,
             "context": context,
             "timestamp": datetime.now().isoformat(),
         }
+        self._next_id += 1
         self._data.append(item)
         self._save()
         return item["id"]
@@ -54,5 +61,6 @@ class ObservationsStore:
         return list(self._data)
 
     def clear(self):
+        """Очистить наблюдения (счётчик id при этом не сбрасывается)."""
         self._data = []
         self._save()
